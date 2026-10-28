@@ -1,0 +1,1493 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>디지털 트윈 재난 대피 시뮬레이터 v2.0</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- GLTFLoader for loading external 3D models -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <!-- GSAP for smooth animations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Noto+Sans+KR:wght@300;400;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Noto Sans KR', 'Inter', sans-serif;
+            background-color: #e0e5ec;
+            user-select: none;
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+        .ui-layer {
+            position: relative;
+            z-index: 10;
+            pointer-events: none; /* Let clicks pass through to 3D canvas when not on UI */
+        }
+        .interactive {
+            pointer-events: auto;
+        }
+        /* Glassmorphism styling */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+        }
+        .glass-panel-dark {
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            color: white;
+        }
+        /* AR Direction Arrow Animation */
+        @keyframes pulse-arrow {
+            0% { transform: translateY(0) scale(1); opacity: 0.8; }
+            50% { transform: translateY(-10px) scale(1.1); opacity: 1; }
+            100% { transform: translateY(0) scale(1); opacity: 0.8; }
+        }
+        .ar-arrow {
+            animation: pulse-arrow 1.5s infinite ease-in-out;
+        }
+        /* Disaster Button Effects */
+        .btn-disaster {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .btn-disaster:active {
+            transform: scale(0.95);
+        }
+        .btn-disaster.active {
+            box-shadow: inset 0 0 0 2px currentColor;
+            transform: translateY(-2px);
+        }
+        
+        /* Danger Overlay */
+        #danger-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, transparent 50%, rgba(255,0,0,0.2) 100%);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 5;
+            transition: opacity 0.5s;
+        }
+
+        /* Custom Scrollbar for Disaster Scenarios */
+        .scenarios-container {
+            max-height: 220px;
+            overflow-y: auto;
+            padding-right: 5px;
+        }
+        .scenarios-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .scenarios-container::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.05);
+            border-radius: 10px;
+        }
+        .scenarios-container::-webkit-scrollbar-thumb {
+            background: rgba(0,0,0,0.2);
+            border-radius: 10px;
+        }
+        .scenarios-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(0,0,0,0.4);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 3D Canvas -->
+    <div id="canvas-container"></div>
+    <div id="danger-overlay"></div>
+
+    <!-- UI Layer -->
+    <div class="ui-layer flex flex-col justify-between h-screen w-full p-4 sm:p-6">
+        
+        <!-- Top Header (HUD) -->
+        <div class="flex justify-between items-start">
+            <div class="flex flex-col space-y-3">
+                <div class="glass-panel rounded-2xl p-4 w-64 interactive transition-colors duration-500" id="status-panel">
+                    <div class="flex items-center space-x-3 mb-2">
+                        <div id="status-icon" class="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xl shadow-inner">
+                            <i class="fa-solid fa-shield-halved"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-xs text-gray-500 font-bold uppercase tracking-wider">시스템 상태</h2>
+                            <p id="status-text" class="text-sm font-bold text-gray-800">평시 안전 모드</p>
+                        </div>
+                    </div>
+                    <div class="bg-gray-100 rounded-lg p-2 mt-2 border border-gray-200">
+                        <p class="text-xs text-gray-600 mb-1 flex justify-between">
+                            <span>AI 대피 경로:</span>
+                            <span id="ai-status" class="font-bold text-green-600">최단거리 안내중</span>
+                        </p>
+                        <!-- Progress bar for evacuation -->
+                        <div class="w-full bg-gray-300 rounded-full h-1.5 mt-1 overflow-hidden">
+                            <div id="evac-progress" class="bg-blue-500 h-1.5 rounded-full" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Real-time Telemetry Panel -->
+                <div class="glass-panel rounded-2xl p-3 w-64 interactive transition-colors duration-500 shadow-md bg-white bg-opacity-90">
+                    <h3 class="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2 flex items-center">
+                        <i class="fa-solid fa-chart-line mr-1.5 text-blue-500"></i> 실시간 환경 데이터
+                    </h3>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div class="bg-gray-50 rounded-md p-1.5 flex flex-col justify-center items-center border border-gray-100 shadow-sm">
+                            <span class="text-gray-400 text-[10px] mb-0.5"><i class="fa-solid fa-temperature-half text-red-400 mr-1"></i>온도</span>
+                            <span id="tele-temp" class="font-bold text-gray-800 text-[13px]">22.4°C</span>
+                        </div>
+                        <div class="bg-gray-50 rounded-md p-1.5 flex flex-col justify-center items-center border border-gray-100 shadow-sm">
+                            <span class="text-gray-400 text-[10px] mb-0.5"><i class="fa-solid fa-droplet text-blue-400 mr-1"></i>습도</span>
+                            <span id="tele-hum" class="font-bold text-gray-800 text-[13px]">45.2%</span>
+                        </div>
+                        <div class="bg-gray-50 rounded-md p-1.5 flex flex-col justify-center items-center border border-gray-100 shadow-sm">
+                            <span class="text-gray-400 text-[10px] mb-0.5"><i class="fa-solid fa-wind text-gray-400 mr-1"></i>CO2</span>
+                            <span id="tele-co2" class="font-bold text-gray-800 text-[13px]">410ppm</span>
+                        </div>
+                        <div class="bg-gray-50 rounded-md p-1.5 flex flex-col justify-center items-center border border-gray-100 shadow-sm">
+                            <span class="text-gray-400 text-[10px] mb-0.5"><i class="fa-solid fa-circle-radiation text-yellow-500 mr-1"></i>방사선</span>
+                            <span id="tele-rad" class="font-bold text-gray-800 text-[13px]">0.11µSv</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Custom Building Loader / Preset Selection -->
+            <div class="glass-panel rounded-2xl p-3 interactive flex flex-col space-y-3 w-48 sm:w-56">
+                <div>
+                    <h3 class="text-sm font-bold text-gray-800 mb-1">시뮬레이션 장소</h3>
+                    <select id="preset-select" onchange="changeBuilding(this.value)" class="w-full text-xs bg-gray-50 border border-gray-200 text-gray-700 rounded-md p-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 font-bold">
+                        <option value="office">🏢 기본 오피스</option>
+                        <option value="hospital">🏥 종합병원</option>
+                        <option value="cityhall">🏛️ 시청 (공공기관)</option>
+                        <option value="university">🎓 대학교 강의동</option>
+                        <option value="mall">🛍️ 복합 쇼핑몰</option>
+                        <option value="factory">🏭 스마트 공장</option>
+                        <option value="apartment">🏢 주거용 아파트</option>
+                        <option value="hotel">🏨 대형 호텔</option>
+                        <option value="subway">🚇 지하철 역사</option>
+                        <option value="datacenter">💻 데이터 센터</option>
+                    </select>
+                </div>
+                <div class="border-t border-gray-200 pt-2 text-right">
+                    <p class="text-[10px] text-gray-500 mb-1">실제 건물 연동 (BIM)</p>
+                    <button onclick="document.getElementById('model-upload').click()" class="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-2 py-1.5 rounded-lg text-xs font-bold transition shadow-sm w-full flex items-center justify-center">
+                        <i class="fa-solid fa-file-import mr-1.5 text-indigo-500"></i> 외부 모델(.glb)
+                    </button>
+                    <button onclick="loadDefaultBuilding()" id="btn-reset-bldg" class="hidden bg-gray-100 text-gray-600 hover:bg-gray-200 px-3 py-1.5 rounded-lg text-[10px] font-bold transition w-full text-center mt-1">
+                        <i class="fa-solid fa-rotate-left mr-1"></i> 원래 건물로 복구
+                    </button>
+                    <input type="file" id="model-upload" accept=".glb,.gltf" class="hidden" onchange="handleModelUpload(event)">
+                </div>
+            </div>
+            
+            <!-- AR Direction HUD -->
+            <div id="ar-hud" class="glass-panel rounded-full w-16 h-16 flex flex-col items-center justify-center interactive shadow-lg hidden absolute top-4 left-1/2 transform -translate-x-1/2">
+                <i id="ar-dir-icon" class="fa-solid fa-arrow-up text-3xl text-green-500 ar-arrow"></i>
+                <span id="ar-dist" class="text-[10px] font-bold mt-1 text-gray-700">12m</span>
+            </div>
+        </div>
+
+        <!-- Center Notification (Alerts) -->
+        <div class="flex justify-center items-center pointer-events-none mt-10">
+            <div id="alert-box" class="glass-panel-dark rounded-xl py-3 px-6 transform -translate-y-4 opacity-0 transition-all duration-300 shadow-2xl flex items-center space-x-3 border-l-4 border-red-500">
+                <i class="fa-solid fa-triangle-exclamation text-yellow-400 text-xl pulse-arrow"></i>
+                <div>
+                    <h3 id="alert-title" class="font-bold text-sm">위험 감지</h3>
+                    <p id="alert-desc" class="text-xs text-gray-300">경로를 재탐색합니다.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Controls (Disaster Scenarios) -->
+        <div class="mb-4 sm:mb-8">
+            <div class="glass-panel rounded-3xl p-4 sm:p-5 max-w-2xl mx-auto interactive">
+                <div class="flex justify-between items-center px-2 cursor-pointer select-none" onclick="toggleScenarios()" title="클릭하여 접기/펴기">
+                    <h1 class="text-sm sm:text-base font-extrabold text-gray-800 tracking-tight flex items-center">
+                        재난 시나리오 제어 (v2.0 엔진)
+                        <i id="toggle-icon" class="fa-solid fa-chevron-down ml-2 text-gray-500 transition-transform duration-300"></i>
+                    </h1>
+                    <button onclick="event.stopPropagation(); resetSimulation()" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1 rounded-full font-bold transition">
+                        <i class="fa-solid fa-rotate-right mr-1"></i> 초기화
+                    </button>
+                </div>
+                
+                <div id="scenarios-content" class="hidden mt-3">
+                    <!-- Buttons (20 Scenarios) -->
+                    <div class="grid grid-cols-4 sm:grid-cols-5 gap-2 sm:gap-3 scenarios-container">
+                        <!-- 기본 4종 -->
+                        <button onclick="triggerDisaster('fire')" id="btn-fire" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-red-50 text-red-600 hover:bg-red-100 border border-red-100">
+                            <i class="fa-solid fa-fire text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">화재발생</span>
+                        </button>
+                    <button onclick="triggerDisaster('flood')" id="btn-flood" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-100">
+                        <i class="fa-solid fa-water text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">실내침수</span>
+                    </button>
+                    <button onclick="triggerDisaster('quake')" id="btn-quake" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-100">
+                        <i class="fa-solid fa-house-crack text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">강진(6.5)</span>
+                    </button>
+                    <!-- 신규 16종 -->
+                    <button onclick="triggerDisaster('gas')" id="btn-gas" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-green-50 text-green-600 hover:bg-green-100 border border-green-100">
+                        <i class="fa-solid fa-smog text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">가스누출</span>
+                    </button>
+                    <button onclick="triggerDisaster('chemical')" id="btn-chemical" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-purple-50 text-purple-600 hover:bg-purple-100 border border-purple-100">
+                        <i class="fa-solid fa-flask text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">화학유출</span>
+                    </button>
+                    <button onclick="triggerDisaster('explosion')" id="btn-explosion" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-orange-50 text-orange-600 hover:bg-orange-100 border border-orange-100">
+                        <i class="fa-solid fa-bomb text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">테러/폭발</span>
+                    </button>
+                    <button onclick="triggerDisaster('collapse')" id="btn-collapse" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-stone-50 text-stone-600 hover:bg-stone-100 border border-stone-100">
+                        <i class="fa-solid fa-building-circle-xmark text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">건물붕괴</span>
+                    </button>
+                    <button onclick="triggerDisaster('biohazard')" id="btn-biohazard" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-lime-50 text-lime-600 hover:bg-lime-100 border border-lime-100">
+                        <i class="fa-solid fa-biohazard text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">생물학위험</span>
+                    </button>
+                    <button onclick="triggerDisaster('radiation')" id="btn-radiation" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-yellow-50 text-yellow-600 hover:bg-yellow-100 border border-yellow-100">
+                        <i class="fa-solid fa-radiation text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">방사능누출</span>
+                    </button>
+                    <button onclick="triggerDisaster('sinkhole')" id="btn-sinkhole" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-neutral-100 text-neutral-700 hover:bg-neutral-200 border border-neutral-200">
+                        <i class="fa-solid fa-arrow-down-long text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">싱크홀</span>
+                    </button>
+                    <button onclick="triggerDisaster('snow')" id="btn-snow" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-sky-50 text-sky-500 hover:bg-sky-100 border border-sky-100">
+                        <i class="fa-solid fa-snowflake text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">폭설고립</span>
+                    </button>
+                    <button onclick="triggerDisaster('typhoon')" id="btn-typhoon" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-cyan-50 text-cyan-600 hover:bg-cyan-100 border border-cyan-100">
+                        <i class="fa-solid fa-hurricane text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">초강력태풍</span>
+                    </button>
+                    <button onclick="triggerDisaster('tsunami')" id="btn-tsunami" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100">
+                        <i class="fa-solid fa-water text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">지진해일</span>
+                    </button>
+                    <button onclick="triggerDisaster('stampede')" id="btn-stampede" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-100">
+                        <i class="fa-solid fa-people-group text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">압사위험</span>
+                    </button>
+                    <button onclick="triggerDisaster('cyber')" id="btn-cyber" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-100">
+                        <i class="fa-solid fa-bug text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">시스템해킹</span>
+                    </button>
+                    <button onclick="triggerDisaster('shooter')" id="btn-shooter" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-red-100 text-red-700 hover:bg-red-200 border border-red-200">
+                        <i class="fa-solid fa-gun text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">총기난사</span>
+                    </button>
+                    <button onclick="triggerDisaster('drone')" id="btn-drone" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200">
+                        <i class="fa-solid fa-plane-circle-xmark text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">드론추락</span>
+                    </button>
+                    <button onclick="triggerDisaster('dust')" id="btn-dust" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-yellow-100 text-yellow-700 hover:bg-yellow-200 border border-yellow-200">
+                        <i class="fa-solid fa-mask-face text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">초미세먼지</span>
+                    </button>
+                    <button onclick="triggerDisaster('heatwave')" id="btn-heatwave" class="btn-disaster flex flex-col items-center justify-center p-2 rounded-xl bg-orange-100 text-orange-700 hover:bg-orange-200 border border-orange-200">
+                        <i class="fa-solid fa-temperature-high text-lg sm:text-xl mb-1"></i><span class="text-[9px] sm:text-[10px] font-bold">폭염</span>
+                    </button>
+                </div>
+
+                <div class="mt-4 pt-3 border-t border-gray-200 flex justify-center">
+                    <button id="btn-evacuate" onclick="startEvacuation()" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-3 rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 transition-all text-sm sm:text-base">
+                        <i class="fa-solid fa-person-running mr-2"></i> AI 동적 대피 시작
+                    </button>
+                </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript / Three.js Logic -->
+    <script>
+        // --- Core Variables ---
+        let scene, camera, renderer;
+        let buildingGroup, hazardGroup;
+        let player;
+        let isEvacuating = false;
+        let currentDisaster = null;
+        let evacTween = null;
+        let hazardNode = null;
+        let currentPath = [];
+        let collidableBoxes = []; // 충돌 판정용 바운딩 박스 배열
+        
+        // --- Keyboard Controls ---
+        const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, w: false, a: false, s: false, d: false, W: false, A: false, S: false, D: false };
+        
+        // --- Physics & Disaster Objects ---
+        let fireParticles = [];
+        let floodPlane;
+        let ambientLight, directionalLight, flashlight;
+        let earthquakeActive = false;
+
+        // --- Presets (10 Buildings) ---
+        let nodes = {};
+        let edges = {};
+        let currentPreset = 'office';
+        let customModel = null; // Store custom loaded building
+
+        const wallMat = new THREE.MeshStandardMaterial({ color: 0x64748b, transparent: true, opacity: 0.9, roughness: 0.6 });
+
+        function createWall(w, h, d, x, z) {
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const wall = new THREE.Mesh(geo, wallMat);
+            wall.position.set(x, h/2, z);
+            wall.castShadow = true;
+            wall.receiveShadow = true;
+            buildingGroup.add(wall);
+        }
+
+        // --- Prop Generators ---
+        function createDesk(x, z, rot) {
+            const group = new THREE.Group();
+            const top = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 1), new THREE.MeshStandardMaterial({color: 0xdeb887, roughness: 0.7}));
+            top.position.y = 1; top.castShadow = true; group.add(top);
+            const legMat = new THREE.MeshStandardMaterial({color: 0x333333});
+            [[-0.9,0.5,-0.4], [0.9,0.5,-0.4], [-0.9,0.5,0.4], [0.9,0.5,0.4]].forEach(pos => {
+                const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1, 0.1), legMat);
+                leg.position.set(...pos); leg.castShadow = true; group.add(leg);
+            });
+            const monitor = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 0.05), new THREE.MeshStandardMaterial({color: 0x111111}));
+            monitor.position.set(0, 1.3, -0.2); group.add(monitor);
+            group.position.set(x, 0, z); group.rotation.y = rot; buildingGroup.add(group);
+        }
+        function createBookshelf(x, z, rot) {
+            const shelf = new THREE.Mesh(new THREE.BoxGeometry(2.5, 3, 0.8), new THREE.MeshStandardMaterial({color: 0x6b7280}));
+            shelf.position.set(x, 1.5, z); shelf.rotation.y = rot; shelf.castShadow = true; buildingGroup.add(shelf);
+        }
+        function createGenerator(x, z) {
+            const group = new THREE.Group();
+            const base = new THREE.Mesh(new THREE.BoxGeometry(3, 2, 2), new THREE.MeshStandardMaterial({color: 0x475569}));
+            base.position.y = 1; base.castShadow = true; group.add(base);
+            const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 2.1, 16), new THREE.MeshStandardMaterial({color: 0x1e293b}));
+            cyl.rotation.z = Math.PI / 2; cyl.position.y = 1; group.add(cyl);
+            group.position.set(x, 0, z); buildingGroup.add(group);
+        }
+        function createHydrant(x, z, rot) {
+            const group = new THREE.Group();
+            const box = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.2), new THREE.MeshStandardMaterial({color: 0xdc2626}));
+            box.position.y = 1.5; box.castShadow = true; group.add(box);
+            const sign = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.2, 0.05), new THREE.MeshBasicMaterial({color: 0xffffff}));
+            sign.position.set(0, 2.3, 0.1); group.add(sign);
+            group.position.set(x, 0, z); group.rotation.y = rot; buildingGroup.add(group);
+        }
+        function createServerRack(x, z, rot) {
+            const rack = new THREE.Mesh(new THREE.BoxGeometry(1, 2.8, 1.2), new THREE.MeshStandardMaterial({color: 0x111827}));
+            rack.position.set(x, 1.4, z); rack.rotation.y = rot; rack.castShadow = true;
+            const ledMat = new THREE.MeshBasicMaterial({color: 0x3b82f6});
+            for(let i=0.5; i<2.5; i+=0.3) {
+                const led = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.02, 0.02), ledMat);
+                led.position.set(0, i - 1.4, 0.6); rack.add(led);
+            }
+            buildingGroup.add(rack);
+        }
+        function createPlant(x, z) {
+            const group = new THREE.Group();
+            const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.2, 0.6), new THREE.MeshStandardMaterial({color: 0xf3f4f6}));
+            pot.position.y = 0.3; pot.castShadow = true; group.add(pot);
+            const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), new THREE.MeshStandardMaterial({color: 0x22c55e}));
+            leaves.position.y = 0.9; leaves.castShadow = true; group.add(leaves);
+            group.position.set(x, 0, z); buildingGroup.add(group);
+        }
+        function createVendingMachine(x, z, rot) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.5, 1), new THREE.MeshStandardMaterial({color: 0x1e3a8a}));
+            body.position.y = 1.25; body.castShadow = true; group.add(body);
+            const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.5), new THREE.MeshBasicMaterial({color: 0x93c5fd, transparent: true, opacity: 0.7}));
+            glass.position.set(0, 1.3, 0.51); group.add(glass);
+            group.position.set(x, 0, z); group.rotation.y = rot; buildingGroup.add(group);
+        }
+
+        // 신규 추가: 소화기 및 에어컨(공조기)
+        function createExtinguisher(x, z, rot) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.8, 16), new THREE.MeshStandardMaterial({color: 0xdc2626, roughness: 0.3}));
+            body.position.y = 0.4; body.castShadow = true; group.add(body);
+            const hose = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.6, 8), new THREE.MeshStandardMaterial({color: 0x111111}));
+            hose.position.set(0.25, 0.4, 0); group.add(hose);
+            group.position.set(x, 0, z); group.rotation.y = rot; buildingGroup.add(group);
+        }
+
+        function createAirConditioner(x, z, rot) {
+            const ac = new THREE.Mesh(new THREE.BoxGeometry(1.5, 3.5, 1), new THREE.MeshStandardMaterial({color: 0xf8fafc, roughness: 0.5}));
+            ac.position.set(x, 1.75, z); ac.rotation.y = rot; ac.castShadow = true; buildingGroup.add(ac);
+        }
+
+        const buildingPresets = {
+            office: {
+                nodes: {
+                    'start': { x: -16, z: 16 }, 'hall_tl': { x: -8, z: 16 }, 'hall_tc': { x: 0, z: 16 },
+                    'hall_tr': { x: 16, z: 16 }, 'hall_c': { x: 0, z: 0 }, 'hall_bl': { x: -10, z: -14 },
+                    'hall_bc': { x: 0, z: -14 }, 'hall_br': { x: 14, z: -14 },
+                    'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: 18, z: -18 }
+                },
+                edges: {
+                    'start': ['hall_tl'], 'hall_tl': ['start', 'hall_tc'],
+                    'hall_tc': ['hall_tl', 'hall_tr', 'hall_c'], 'hall_tr': ['hall_tc'],
+                    'hall_c': ['hall_tc', 'hall_bc'],
+                    'hall_bc': ['hall_c', 'hall_bl', 'hall_br', 'main_exit'],
+                    'hall_bl': ['hall_bc'], 'hall_br': ['hall_bc', 'emerg_exit'],
+                    'main_exit': ['hall_bc'], 'emerg_exit': ['hall_br']
+                },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20);
+                    createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    
+                    // 복잡한 미로형 사무실 구조를 위한 가벽 배치
+                    createWall(12, 4, 1, -14, 8); // 좌상단 임원실 분리벽
+                    createWall(16, 4, 1, 12, 8);  // 우상단 휴게실/회의실 분리벽
+                    createWall(1, 4, 16, -4, 0);  // 중앙 좌측 복도벽
+                    createWall(1, 4, 12, 8, -10); // 하단 우측 분리벽
+                    createWall(12, 4, 1, -14, -6);// 좌하단 서버실 분리벽
+                    
+                    // 좌상단: CEO / 임원실
+                    createDesk(-16, 14, Math.PI/2); createBookshelf(-18, 10, Math.PI/2);
+                    createPlant(-12, 18); createAirConditioner(-18, 18, Math.PI/4);
+                    
+                    // 우상단: 휴게 공간 및 탕비실
+                    createVendingMachine(12, 18, 0); createVendingMachine(15, 18, 0);
+                    createDesk(14, 12, 0); createDesk(14, 10, 0); createPlant(18, 10);
+                    createExtinguisher(18, 15, -Math.PI/2);
+                    
+                    // 우중단 ~ 우하단: 일반 파티션 사무 구역
+                    for(let x=12; x<=18; x+=4) {
+                        createDesk(x, 2, 0); createDesk(x, -2, 0); createDesk(x, -6, 0);
+                    }
+                    createHydrant(19, 0, -Math.PI/2);
+                    
+                    // 좌하단: 서버실 및 통신장비실
+                    createServerRack(-16, -16, 0); createServerRack(-12, -16, 0); createServerRack(-8, -16, 0);
+                    createServerRack(-16, -10, 0); createServerRack(-12, -10, 0); createServerRack(-8, -10, 0);
+                    createAirConditioner(-18, -18, Math.PI/4); createExtinguisher(-18, -8, Math.PI/2);
+                    
+                    // 복도 비품 및 비상발전 설비
+                    createHydrant(-3, 6, Math.PI/2); createHydrant(0, -6, 0);
+                    createGenerator(-2, -12); // 비상용 서브 발전기
+                }
+            },
+            hospital: {
+                nodes: { 
+                    'start': { x: -16, z: 16 }, 'hall_n': { x: 0, z: 16 }, 'ward_b': { x: 16, z: 16 },
+                    'hall_c': { x: 0, z: 2 }, 'op_room': { x: -12, z: 2 }, 'pharmacy': { x: 14, z: 2 },
+                    'hall_s': { x: 0, z: -14 }, 'lab': { x: -12, z: -14 },
+                    'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: 18, z: -14 } 
+                },
+                edges: { 
+                    'start': ['hall_n'], 'hall_n': ['start', 'ward_b', 'hall_c'], 'ward_b': ['hall_n'],
+                    'hall_c': ['hall_n', 'op_room', 'pharmacy', 'hall_s'],
+                    'op_room': ['hall_c'], 'pharmacy': ['hall_c'],
+                    'hall_s': ['hall_c', 'lab', 'emerg_exit', 'main_exit'],
+                    'lab': ['hall_s'], 'main_exit': ['hall_s'], 'emerg_exit': ['hall_s'] 
+                },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20); createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    // 복잡한 병원 구획 설정 (수술실, 병실, 약국, 검사실 분리)
+                    createWall(16, 4, 1, -12, 10); createWall(16, 4, 1, 12, 10); // 상단 병동 분리
+                    createWall(1, 4, 12, -6, 4); createWall(1, 4, 12, 6, 4);     // 중앙 복도 라인
+                    createWall(16, 4, 1, -12, -6); createWall(16, 4, 1, 12, -6); // 하단 특수구역 분리
+                    
+                    // 입원 병동 (좌/우 상단)
+                    createDesk(-16, 18, Math.PI/2); createBookshelf(-12, 18, Math.PI/2); createAirConditioner(-18, 18, Math.PI/4);
+                    createDesk(16, 18, -Math.PI/2); createBookshelf(12, 18, -Math.PI/2); createExtinguisher(18, 14, -Math.PI/2);
+                    
+                    // 수술실 구역 (좌측 중앙)
+                    createServerRack(-14, 6, 0); createServerRack(-14, 2, 0); // 의료장비 대체
+                    createGenerator(-10, 4); createHydrant(-7, 8, Math.PI/2);
+                    
+                    // 약국 및 조제실 (우측 중앙)
+                    for(let i=8; i<=16; i+=3) { createBookshelf(i, 6, 0); createBookshelf(i, 0, 0); } // 약장 배열
+                    createExtinguisher(7, 2, Math.PI/2);
+                    
+                    // 영상의학/검사실 및 기계실 (좌측 하단)
+                    createGenerator(-15, -15); createGenerator(-9, -15);
+                    createVendingMachine(-15, -10, Math.PI/2);
+                    
+                    // 간호 스테이션 및 로비 (중앙 교차로 부근)
+                    createDesk(-2, 11, 0); createDesk(2, 11, 0);
+                    createPlant(0, 8); createAirConditioner(18, -18, -Math.PI/4);
+                }
+            },
+            cityhall: {
+                nodes: { 'start': { x: 0, z: 15 }, 'lobby': { x: 0, z: 8 }, 'hall_center': { x: 0, z: 0 }, 'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: -18, z: 0 } },
+                edges: { 'start': ['lobby'], 'lobby': ['start', 'hall_center'], 'hall_center': ['lobby', 'main_exit', 'emerg_exit'], 'main_exit': ['hall_center'], 'emerg_exit': ['hall_center'] },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20); createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    // 메인 로비 및 인포데스크
+                    createWall(12, 4, 1, -14, 0); createWall(12, 4, 1, 14, 0);
+                    createDesk(0, 10, 0); createDesk(-3, 10, 0); createDesk(3, 10, 0); // 통합 민원창구
+                    // 부서별 사무 공간 (4구역 분리)
+                    createWall(1, 4, 12, -10, 14); createWall(1, 4, 12, 10, 14);
+                    createWall(1, 4, 12, -10, -14); createWall(1, 4, 12, 10, -14);
+                    // 대기석 (책상 나열하여 의자처럼 연출)
+                    for(let i=-6; i<=6; i+=3) { createDesk(i, 4, 0); }
+                    // 부서 내부 가구 및 문서 보관함
+                    createBookshelf(-15, 18, 0); createBookshelf(15, 18, 0);
+                    createDesk(-15, -10, 0); createDesk(-15, -15, 0); createDesk(15, -10, 0); createDesk(15, -15, 0);
+                    createPlant(-8, 8); createPlant(8, 8); createHydrant(0, -5, 0);
+                }
+            },
+            university: {
+                nodes: { 'start': { x: -15, z: 15 }, 'hall_1': { x: 0, z: 15 }, 'hall_center': { x: 0, z: 0 }, 'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: 18, z: 15 } },
+                edges: { 'start': ['hall_1'], 'hall_1': ['start', 'hall_center', 'emerg_exit'], 'hall_center': ['hall_1', 'main_exit'], 'main_exit': ['hall_center'], 'emerg_exit': ['hall_1'] },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20); createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    // 대형 강의실 (좌측 전체)
+                    createWall(1, 4, 30, -5, 5); createWall(14, 4, 1, -12, -10);
+                    for(let z=15; z>=-5; z-=4) {
+                        createDesk(-15, z, 0); createDesk(-11, z, 0); createDesk(-7, z, 0);
+                    }
+                    createDesk(-11, -8, Math.PI); // 교탁
+                    // 도서관 열람실 (우측 상단)
+                    createWall(15, 4, 1, 12, 0);
+                    for(let x=7; x<=17; x+=5) { createBookshelf(x, 15, Math.PI/2); createBookshelf(x, 10, Math.PI/2); }
+                    // 학생 휴게 공간 및 동아리방 (우측 하단)
+                    createDesk(10, -10, Math.PI/4); createDesk(15, -15, -Math.PI/4);
+                    createVendingMachine(7, -18, 0); createVendingMachine(10, -18, 0);
+                    createHydrant(0, 0, 0); createPlant(3, 15);
+                }
+            },
+            mall: {
+                nodes: { 
+                    'start': { x: -16, z: 16 }, 'shop_tl': { x: -16, z: 0 }, 'hall_n': { x: 0, z: 16 },
+                    'hall_c': { x: 0, z: 0 }, 'shop_tr': { x: 16, z: 16 }, 'food_court': { x: 16, z: 0 },
+                    'hall_s': { x: 0, z: -10 }, 'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: 18, z: -18 }
+                },
+                edges: { 
+                    'start': ['shop_tl', 'hall_n'], 'shop_tl': ['start', 'hall_c'], 
+                    'hall_n': ['start', 'hall_c', 'shop_tr'], 'shop_tr': ['hall_n', 'food_court'],
+                    'hall_c': ['shop_tl', 'hall_n', 'food_court', 'hall_s'], 
+                    'food_court': ['shop_tr', 'hall_c', 'emerg_exit'],
+                    'hall_s': ['hall_c', 'main_exit', 'emerg_exit'],
+                    'main_exit': ['hall_s'], 'emerg_exit': ['food_court', 'hall_s']
+                },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20); createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    
+                    // 복잡한 쇼핑몰 미로형 팝업스토어 및 매장 배치
+                    createWall(1, 4, 30, -10, 5);  // 좌측 긴 복도 가벽
+                    createWall(10, 4, 1, -15, 8);  // 좌상단 매장 분리
+                    createWall(10, 4, 1, -15, -8); // 좌하단 매장 분리
+                    createWall(1, 4, 20, 10, 10);  // 우상단 푸드코트 가벽
+                    createWall(10, 4, 1, 15, -4);  // 우중단 분리벽
+                    
+                    // 좌측 의류/잡화 매장
+                    createBookshelf(-16, 14, 0); createBookshelf(-13, 14, 0); createExtinguisher(-11, 14, 0);
+                    createDesk(-16, 2, 0); createDesk(-13, 2, 0);
+                    createBookshelf(-16, -14, 0); createBookshelf(-13, -14, 0);
+                    
+                    // 우측 푸드코트 구역
+                    for(let z=4; z<=14; z+=5) {
+                        for(let x=13; x<=17; x+=4) { createDesk(x, z, 0); }
+                    }
+                    createVendingMachine(12, -2, 0); createVendingMachine(15, -2, 0); createVendingMachine(18, -2, 0);
+                    createAirConditioner(18, 18, -Math.PI/4); createExtinguisher(11, 4, Math.PI/2);
+                    
+                    // 중앙 광장 거대 기둥/팝업스토어 및 조경 (장애물 역할)
+                    createWall(4, 4, 4, 0, 0); 
+                    createPlant(-3, 3); createPlant(3, 3); createPlant(-3, -3); createPlant(3, -3);
+                    createHydrant(-4, 0, -Math.PI/2); createHydrant(4, 0, Math.PI/2);
+                    
+                    // 비상구 유도 가벽
+                    createWall(8, 4, 1, 15, -12);
+                }
+            },
+            apartment: {
+                nodes: { 'start': { x: -10, z: 15 }, 'living': { x: 0, z: 15 }, 'hall_center': { x: 0, z: 0 }, 'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: 18, z: 0 } },
+                edges: { 'start': ['living'], 'living': ['start', 'hall_center'], 'hall_center': ['living', 'main_exit', 'emerg_exit'], 'main_exit': ['hall_center'], 'emerg_exit': ['hall_center'] },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20); createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    createWall(8, 4, 1, 0, 8); createWall(8, 4, 1, 0, -8); createWall(1, 4, 16, -4, 0); createWall(1, 4, 16, 4, 0); // 중앙 복도 코어
+                    createDesk(-10, 15, 0); createBookshelf(-15, 15, Math.PI/2);
+                    createPlant(-5, 12); createPlant(5, 12); createHydrant(0, 4, 0);
+                }
+            },
+            hotel: {
+                nodes: { 'start': { x: -15, z: 15 }, 'corr_1': { x: -15, z: 0 }, 'hall_center': { x: 0, z: 0 }, 'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: 18, z: 0 } },
+                edges: { 'start': ['corr_1'], 'corr_1': ['start', 'hall_center'], 'hall_center': ['corr_1', 'main_exit', 'emerg_exit'], 'main_exit': ['hall_center'], 'emerg_exit': ['hall_center'] },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20); createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    createWall(40, 4, 1, 0, 4); createWall(40, 4, 1, 0, -4); // 긴 복도
+                    for(let x=-15; x<=15; x+=5) {
+                        if(x !== 0) {
+                            createWall(1, 4, 16, x, 12); createWall(1, 4, 16, x, -12); // 객실 분리벽
+                            createDesk(x+2, 15, 0); createDesk(x+2, -15, 0);
+                        }
+                    }
+                    createVendingMachine(0, 3, 0); createHydrant(0, -3, 0);
+                }
+            },
+            subway: {
+                nodes: { 'start': { x: -15, z: 15 }, 'gate': { x: 0, z: 15 }, 'hall_center': { x: 0, z: 0 }, 'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: 18, z: 15 } },
+                edges: { 'start': ['gate'], 'gate': ['start', 'hall_center', 'emerg_exit'], 'hall_center': ['gate', 'main_exit'], 'main_exit': ['hall_center'], 'emerg_exit': ['gate'] },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20); createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    createWall(15, 4, 1, -12, 0); createWall(15, 4, 1, 12, 0); // 플랫폼 가벽
+                    createVendingMachine(-10, 2, 0); createVendingMachine(-5, 2, 0); createVendingMachine(10, 2, 0); createVendingMachine(5, 2, 0);
+                    createHydrant(0, 10, 0); createHydrant(0, -10, 0);
+                }
+            },
+            datacenter: {
+                nodes: { 'start': { x: -15, z: 15 }, 'aisle': { x: -15, z: 0 }, 'hall_center': { x: 0, z: 0 }, 'main_exit': { x: 0, z: -18 }, 'emerg_exit': { x: 18, z: -18 } },
+                edges: { 'start': ['aisle'], 'aisle': ['start', 'hall_center'], 'hall_center': ['aisle', 'main_exit', 'emerg_exit'], 'main_exit': ['hall_center'], 'emerg_exit': ['hall_center'] },
+                build: () => {
+                    createWall(40, 4, 1, 0, 20); createWall(40, 4, 1, 0, -20); createWall(1, 4, 40, -20, 0); createWall(1, 4, 40, 20, 0);
+                    for(let x=-10; x<=10; x+=5) {
+                        for(let z=5; z<=15; z+=3) { createServerRack(x, z, Math.PI/2); }
+                        for(let z=-15; z<=-5; z+=3) { createServerRack(x, z, Math.PI/2); }
+                    }
+                    createGenerator(-15, -15); createGenerator(15, -15); createHydrant(0, 0, 0);
+                }
+            }
+        };
+
+        function changeBuilding(presetKey) {
+            currentPreset = presetKey;
+            customModel = null;
+            document.getElementById('preset-select').value = presetKey;
+            
+            buildDigitalTwin();
+            
+            // Re-create player to spawn at new start node
+            if (player) {
+                player.position.set(nodes.start.x, 1, nodes.start.z);
+            }
+            
+            resetSimulation();
+            showAlert("장소 변경됨", `${document.querySelector('#preset-select option:checked').text} 구조가 로드되었습니다.`, "info");
+        }
+
+        // --- Initialization ---
+        function init() {
+            // 1. Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1e293b);
+            scene.fog = new THREE.Fog(0x1e293b, 30, 100);
+
+            // 2. Camera Setup (구조물이 한눈에 잘 보이도록 각도 상향)
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 45, 45);
+            camera.lookAt(0, 0, 0);
+
+            // 3. Renderer Setup
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 4. Lighting
+            ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(20, 40, 20);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+            flashlight = new THREE.SpotLight(0xffffff, 0, 40, Math.PI / 6, 0.5, 1);
+            flashlight.castShadow = true;
+            scene.add(flashlight);
+
+            // 5. Groups
+            buildingGroup = new THREE.Group();
+            hazardGroup = new THREE.Group();
+            scene.add(buildingGroup);
+            scene.add(hazardGroup);
+
+            // Generate First Preset
+            changeBuilding('office');
+            createPlayer();
+
+            // 6. Events
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('keydown', onKeyDown);
+            window.addEventListener('keyup', onKeyUp);
+
+            // 7. Start Loop
+            animate();
+        }
+
+        // --- Building Digital Twin ---
+        function buildDigitalTwin() {
+            // Clear existing if any
+            while(buildingGroup.children.length > 0) {
+                buildingGroup.remove(buildingGroup.children[0]);
+            }
+
+            // Floor & Grid
+            const floorGeo = new THREE.PlaneGeometry(50, 50);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.9, metalness: 0.1 });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            const gridHelper = new THREE.GridHelper(50, 25, 0x94a3b8, 0x94a3b8);
+            gridHelper.position.y = 0.01;
+            buildingGroup.add(floor);
+            buildingGroup.add(gridHelper);
+
+            // Load specific preset
+            const preset = buildingPresets[currentPreset];
+            nodes = preset.nodes;
+            edges = preset.edges;
+            
+            preset.build();
+
+            // Exits (Safe Zones)
+            createExitZone(nodes.main_exit.x, nodes.main_exit.z, "Main Exit");
+            createExitZone(nodes.emerg_exit.x, nodes.emerg_exit.z, "Emerg. Exit");
+
+            // Only add flood plane if it doesn't exist in scene
+            if (!floodPlane) {
+                const floodGeo = new THREE.PlaneGeometry(40, 40);
+                const floodMat = new THREE.MeshStandardMaterial({
+                    color: 0x3b82f6, transparent: true, opacity: 0.6, roughness: 0.1, metalness: 0.8
+                });
+                floodPlane = new THREE.Mesh(floodGeo, floodMat);
+                floodPlane.rotation.x = -Math.PI / 2;
+                floodPlane.position.y = -0.5; // Below floor
+                scene.add(floodPlane);
+            }
+
+            // 맵 생성 완료 후 충돌 데이터 갱신
+            updateCollidables();
+        }
+
+        function createExitZone(x, z, label) {
+            const geo = new THREE.BoxGeometry(4, 0.1, 4);
+            const mat = new THREE.MeshBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.5 });
+            const exit = new THREE.Mesh(geo, mat);
+            exit.position.set(x, 0.05, z);
+            buildingGroup.add(exit);
+
+            const ringGeo = new THREE.RingGeometry(1.5, 2, 32);
+            const ringMat = new THREE.MeshBasicMaterial({ color: 0x10b981, side: THREE.DoubleSide });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 2;
+            ring.position.set(x, 0.1, z);
+            buildingGroup.add(ring);
+        }
+
+        // --- Actual Building Upload (GLTF/GLB) ---
+        function handleModelUpload(event) {
+            const file = event.target.files[0];
+            if(!file) return;
+
+            const url = URL.createObjectURL(file);
+            const loader = new THREE.GLTFLoader();
+
+            showAlert("모델 로딩 중...", "용량에 따라 몇 초 정도 소요될 수 있습니다.", "info");
+
+            loader.load(url, (gltf) => {
+                // Remove default building layout
+                while(buildingGroup.children.length > 0) {
+                    buildingGroup.remove(buildingGroup.children[0]);
+                }
+                
+                customModel = gltf.scene;
+                
+                // Auto Center & Scale to fit the simulator space (approx 40x40 units)
+                const box = new THREE.Box3().setFromObject(customModel);
+                const size = box.getSize(new THREE.Vector3()).length();
+                const center = box.getCenter(new THREE.Vector3());
+                
+                const scale = 40 / size;
+                customModel.scale.set(scale, scale, scale);
+                customModel.position.sub(center.multiplyScalar(scale));
+                
+                // Place at floor level
+                const scaledBox = new THREE.Box3().setFromObject(customModel);
+                customModel.position.y -= scaledBox.min.y;
+
+                // Add grid helper back
+                const gridHelper = new THREE.GridHelper(50, 25, 0x94a3b8, 0x94a3b8);
+                gridHelper.position.y = 0.01;
+                buildingGroup.add(gridHelper);
+
+                // Add the custom model
+                buildingGroup.add(customModel);
+                
+                // 외부 모델 로드 완료 후 충돌 데이터 갱신
+                updateCollidables();
+
+                // Show restore button
+                document.getElementById('btn-reset-bldg').classList.remove('hidden');
+
+                showAlert("연동 완료", `[${file.name}] 실제 건물 모델이 매핑되었습니다.`, "success");
+
+                // Reset file input so same file can be uploaded again if needed
+                event.target.value = '';
+                resetSimulation();
+
+            }, undefined, (error) => {
+                console.error("Model load error:", error);
+                showAlert("오류", "모델 파일을 불러올 수 없습니다. GLTF/GLB 파일인지 확인해주세요.", "error");
+            });
+        }
+
+        function loadDefaultBuilding() {
+            customModel = null;
+            buildDigitalTwin();
+            document.getElementById('btn-reset-bldg').classList.add('hidden');
+            showAlert("복구 완료", "프리셋 모델로 복구되었습니다.", "success");
+            resetSimulation();
+        }
+
+        // --- Player (Agent) ---
+        function createPlayer() {
+            const geo = new THREE.SphereGeometry(1, 32, 32);
+            const mat = new THREE.MeshStandardMaterial({ 
+                color: 0x3b82f6, // Tailwind Blue 500
+                emissive: 0x1e3a8a,
+                roughness: 0.2,
+                metalness: 0.5
+            });
+            player = new THREE.Mesh(geo, mat);
+            player.position.set(nodes.start.x, 1, nodes.start.z);
+            player.castShadow = true;
+            scene.add(player);
+
+            // Attach flashlight to player
+            flashlight.target = player;
+        }
+
+        // --- AI Routing (Dynamic A* Simulation) ---
+        // Simple BFS to find shortest path respecting hazards
+        function findPath(startKey, targetKey) {
+            const queue = [[startKey]];
+            const visited = new Set([startKey]);
+
+            while (queue.length > 0) {
+                const path = queue.shift();
+                const node = path[path.length - 1];
+
+                if (node === targetKey) return path;
+
+                for (const neighbor of edges[node]) {
+                    // Risk Weighted Logic: If node is hazard, skip it (Cost = Infinity)
+                    if (!visited.has(neighbor) && neighbor !== hazardNode) {
+                        visited.add(neighbor);
+                        queue.push([...path, neighbor]);
+                    }
+                }
+            }
+            return null; // No path
+        }
+
+        function calculateBestPath() {
+            // Default: go to main exit. If blocked, go to emergency exit.
+            let path = findPath(getClosestNode(), 'main_exit');
+            let targetLabel = "메인 출구";
+
+            if (!path) {
+                path = findPath(getClosestNode(), 'emerg_exit');
+                targetLabel = "우회로(비상구)";
+                showAlert("경로 차단됨", "AI가 안전한 우회로를 재탐색했습니다.", "warning");
+                updateStatusIcon("fa-route", "text-orange-500", "bg-orange-100");
+                document.getElementById('ai-status').innerText = "우회경로 작동중";
+                document.getElementById('ai-status').className = "font-bold text-orange-500";
+            }
+
+            if (!path) {
+                showAlert("고립 위험", "모든 대피로가 차단되었습니다. 구조 대기 위치로 이동하세요.", "error");
+                updateStatusIcon("fa-skull", "text-red-500", "bg-red-100");
+                document.getElementById('ai-status').innerText = "경로 탐색 불가";
+                document.getElementById('ai-status').className = "font-bold text-red-500";
+                return [];
+            }
+            
+            return path;
+        }
+
+        function getClosestNode() {
+            // For simplicity, if evacuating, we start from 'start' or current node logic.
+            // Since we reset position on evac start, return 'start'
+            return 'start';
+        }
+
+        // --- Collision Detection ---
+        function updateCollidables() {
+            collidableBoxes = [];
+            buildingGroup.updateMatrixWorld(true);
+            buildingGroup.traverse(child => {
+                if (child.isMesh) {
+                    // 바닥, 그리드, 비상구 바닥 표시(RingGeometry) 등은 충돌에서 제외
+                    if (child.geometry && child.geometry.type === 'PlaneGeometry') return;
+                    if (child.geometry && child.geometry.type === 'RingGeometry') return;
+                    if (child.type === 'GridHelper') return;
+                    
+                    // 비상구 박스 구역 제외 (초록색 반투명 재질)
+                    if (child.material && child.material.transparent && child.material.opacity === 0.5 && child.material.color && child.material.color.getHex() === 0x10b981) return;
+
+                    const box = new THREE.Box3().setFromObject(child);
+                    
+                    // 높이가 매우 낮은 객체(카펫, 바닥재 일부 등)는 통과 허용
+                    if (box.max.y - box.min.y < 0.1) return;
+
+                    collidableBoxes.push(box);
+                }
+            });
+        }
+
+        function checkCollision(targetX, targetZ) {
+            // 플레이어의 가상 충돌 반경 지정 (시각적 크기보다 살짝 작게하여 부드러운 벽타기 유도)
+            const playerCollisionRadius = 0.7; 
+            const playerBox = new THREE.Box3();
+            playerBox.min.set(targetX - playerCollisionRadius, 0.1, targetZ - playerCollisionRadius);
+            playerBox.max.set(targetX + playerCollisionRadius, 2.0, targetZ + playerCollisionRadius);
+
+            for (let i = 0; i < collidableBoxes.length; i++) {
+                if (playerBox.intersectsBox(collidableBoxes[i])) {
+                    return true; // 충돌 발생
+                }
+            }
+            return false;
+        }
+
+        // --- Evacuation Animation ---
+        function startEvacuation() {
+            if(isEvacuating) return;
+            
+            // Reset player position
+            player.position.set(nodes.start.x, 1, nodes.start.z);
+            gsap.killTweensOf(player.position);
+
+            currentPath = calculateBestPath();
+            if (currentPath.length < 2) return;
+
+            isEvacuating = true;
+            document.getElementById('btn-evacuate').innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> 대피 시뮬레이션 중...';
+            document.getElementById('btn-evacuate').classList.replace('from-blue-600', 'from-green-600');
+            document.getElementById('btn-evacuate').classList.replace('to-indigo-600', 'to-emerald-600');
+            
+            document.getElementById('ar-hud').classList.remove('hidden');
+
+            moveAlongPath(1); // Start from index 1 (next node)
+        }
+
+        function moveAlongPath(index) {
+            if (index >= currentPath.length) {
+                // Arrived
+                isEvacuating = false;
+                showAlert("대피 성공", "안전 구역에 도착했습니다.", "success");
+                document.getElementById('btn-evacuate').innerHTML = '<i class="fa-solid fa-check mr-2"></i> 생존 완료';
+                document.getElementById('ar-hud').classList.add('hidden');
+                updateStatusIcon("fa-check-circle", "text-green-500", "bg-green-100");
+                return;
+            }
+
+            const targetKey = currentPath[index];
+            const targetPos = nodes[targetKey];
+            
+            // Calculate distance for animation duration (speed)
+            const dx = targetPos.x - player.position.x;
+            const dz = targetPos.z - player.position.z;
+            const dist = Math.sqrt(dx*dx + dz*dz);
+            const duration = dist * 0.15; // Speed factor
+
+            // Update AR HUD
+            document.getElementById('ar-dist').innerText = Math.round(dist) + "m";
+            updateARArrow(dx, dz);
+
+            // Update Progress bar
+            const progress = (index / (currentPath.length - 1)) * 100;
+            document.getElementById('evac-progress').style.width = progress + '%';
+
+            // Special handling for Earthquake penalty (slowed down)
+            const finalDuration = earthquakeActive ? duration * 2.5 : duration;
+
+            evacTween = gsap.to(player.position, {
+                x: targetPos.x,
+                z: targetPos.z,
+                duration: finalDuration,
+                ease: "linear",
+                onComplete: () => moveAlongPath(index + 1)
+            });
+        }
+
+        function updateARArrow(dx, dz) {
+            const icon = document.getElementById('ar-dir-icon');
+            icon.className = "fa-solid text-3xl text-green-500 ar-arrow ";
+            if (Math.abs(dx) > Math.abs(dz)) {
+                if (dx > 0) icon.className += "fa-arrow-right";
+                else icon.className += "fa-arrow-left";
+            } else {
+                if (dz > 0) icon.className += "fa-arrow-down";
+                else icon.className += "fa-arrow-up";
+            }
+        }
+
+        // --- Disaster Engines (v2.0 Logic) ---
+        function clearDisasters() {
+            hazardNode = null;
+            
+            // Clear Particles & Hazards
+            while(hazardGroup.children.length > 0){ 
+                hazardGroup.remove(hazardGroup.children[0]); 
+            }
+            fireParticles = [];
+
+            // Clear Environment Overlays (Light, Fog)
+            ambientLight.intensity = 0.6;
+            directionalLight.intensity = 0.8;
+            flashlight.intensity = 0;
+            scene.fog.color.setHex(0x1e293b);
+            scene.fog.density = 0;
+            
+            document.getElementById('status-panel').classList.remove('glass-panel-dark');
+            document.getElementById('status-panel').classList.add('glass-panel');
+
+            // Clear Flood
+            gsap.to(floodPlane.position, { y: -0.5, duration: 1 });
+            floodPlane.material.opacity = 0.6;
+
+            // Clear Quake
+            earthquakeActive = false;
+            document.getElementById('danger-overlay').style.opacity = '0';
+            document.getElementById('danger-overlay').style.background = 'radial-gradient(circle, transparent 50%, rgba(255,0,0,0.2) 100%)';
+
+            // Reset UI styling
+            document.querySelectorAll('.btn-disaster').forEach(btn => btn.classList.remove('active', 'ring-2', 'ring-offset-2', 'ring-red-500', 'ring-gray-800', 'ring-blue-500', 'ring-amber-500', 'ring-green-500', 'ring-purple-500', 'ring-orange-500', 'ring-stone-500', 'ring-lime-500', 'ring-yellow-500', 'ring-neutral-500', 'ring-sky-500', 'ring-cyan-500', 'ring-indigo-500', 'ring-rose-500', 'ring-emerald-500', 'ring-slate-500'));
+            
+            updateStatus("평시 안전 모드", "text-gray-800");
+            updateStatusIcon("fa-shield-halved", "text-blue-600", "bg-blue-100");
+            document.getElementById('ai-status').innerText = "최단거리 안내 대기";
+            document.getElementById('ai-status').className = "font-bold text-green-600";
+        }
+
+        function triggerDisaster(type) {
+            // If currently running, reset first
+            resetSimulation();
+            clearDisasters();
+            currentDisaster = type;
+
+            const btn = document.getElementById(`btn-${type}`);
+            if(btn) btn.classList.add('active', 'ring-2');
+            
+            // Common hazard node blocking
+            if(['fire', 'gas', 'explosion', 'collapse', 'stampede', 'sinkhole', 'drone', 'shooter', 'chemical'].includes(type)) {
+                hazardNode = nodes.hall_center ? 'hall_center' : 'hall_c';
+                createHazardVisual(nodes[hazardNode].x, nodes[hazardNode].z, type);
+            }
+
+            // Type specific logic
+            switch(type) {
+                case 'fire':
+                    btn.classList.add('ring-red-500');
+                    document.getElementById('danger-overlay').style.opacity = '1';
+                    updateStatus("화재 발생 (복사열 800℃ 감지)", "text-red-600");
+                    updateStatusIcon("fa-fire-flame-curved", "text-red-500", "bg-red-100");
+                    showAlert("CFD 연기 확산 감지", `중앙 복도(Node: ${hazardNode}) 폐쇄됨`, "error");
+                    break;
+                case 'blackout':
+                    btn.classList.add('ring-gray-800');
+                    ambientLight.intensity = 0.05;
+                    directionalLight.intensity = 0.1;
+                    flashlight.position.set(0, 5, 0);
+                    flashlight.intensity = 2;
+                    player.add(flashlight);
+                    document.getElementById('status-panel').classList.remove('glass-panel');
+                    document.getElementById('status-panel').classList.add('glass-panel-dark');
+                    document.getElementById('status-text').classList.replace('text-gray-800', 'text-white');
+                    updateStatus("대규모 정전 (0 Lux)", "text-white");
+                    updateStatusIcon("fa-lightbulb", "text-yellow-400", "bg-gray-700");
+                    showAlert("시야 상실", "AR 플래시 라이트 및 축광 유도 맵핑 가동", "warning");
+                    break;
+                case 'flood':
+                case 'tsunami':
+                    btn.classList.add('ring-blue-500');
+                    updateStatus(type === 'flood' ? "실내 침수 (수압 증가)" : "지진해일 접근 중", "text-blue-600");
+                    updateStatusIcon("fa-water", "text-blue-500", "bg-blue-100");
+                    showAlert("수압 저항 경고", "방화문 개폐 불가. 고지대로 대피하세요.", "warning");
+                    gsap.to(floodPlane.position, { y: type==='tsunami' ? 1.5 : 0.8, duration: 3, ease: "power2.inOut" });
+                    break;
+                case 'quake':
+                    btn.classList.add('ring-amber-500');
+                    document.getElementById('danger-overlay').style.opacity = '1';
+                    updateStatus("지진 발생 (진도 6.5)", "text-amber-600");
+                    updateStatusIcon("fa-house-crack", "text-amber-500", "bg-amber-100");
+                    showAlert("구조물 붕괴 위험", "이동 속도 75% 감소. 낙하물 주의.", "error");
+                    earthquakeActive = true;
+                    break;
+                case 'gas':
+                    btn.classList.add('ring-green-500');
+                    scene.fog.color.setHex(0xdcfce7);
+                    scene.fog.density = 0.02;
+                    updateStatus("유독가스 누출 감지", "text-green-600");
+                    updateStatusIcon("fa-smog", "text-green-500", "bg-green-100");
+                    showAlert("호흡기 주의", "유독가스 확산 중. 방독면을 착용하세요.", "error");
+                    break;
+                case 'chemical':
+                    btn.classList.add('ring-purple-500');
+                    updateStatus("화학물질 유출 사고", "text-purple-600");
+                    updateStatusIcon("fa-flask", "text-purple-500", "bg-purple-100");
+                    showAlert("접촉 위험", "산성 물질 유출구역 접근 금지.", "error");
+                    break;
+                case 'explosion':
+                case 'drone':
+                    btn.classList.add('ring-orange-500');
+                    earthquakeActive = true;
+                    setTimeout(() => { earthquakeActive = false; }, 1500); // Short shake
+                    updateStatus(type==='explosion' ? "테러 폭발 발생" : "드론 추락/폭발", "text-orange-600");
+                    updateStatusIcon(type==='explosion' ? "fa-bomb" : "fa-plane-circle-xmark", "text-orange-500", "bg-orange-100");
+                    showAlert("화재 및 파편 위험", "폭발 지점 인근 우회 필요", "error");
+                    break;
+                case 'collapse':
+                    btn.classList.add('ring-stone-500');
+                    updateStatus("건물 부분 붕괴", "text-stone-600");
+                    updateStatusIcon("fa-building-circle-xmark", "text-stone-500", "bg-stone-100");
+                    showAlert("잔해물 적치", "경로가 완전히 차단되었습니다.", "error");
+                    break;
+                case 'biohazard':
+                    btn.classList.add('ring-lime-500');
+                    document.getElementById('danger-overlay').style.background = 'radial-gradient(circle, transparent 50%, rgba(132,204,22,0.2) 100%)';
+                    document.getElementById('danger-overlay').style.opacity = '1';
+                    updateStatus("생물학적 위험 경보", "text-lime-600");
+                    updateStatusIcon("fa-biohazard", "text-lime-500", "bg-lime-100");
+                    showAlert("격리 구역", "공조 시스템 차단됨. 오염구역 우회.", "error");
+                    break;
+                case 'radiation':
+                    btn.classList.add('ring-yellow-500');
+                    document.getElementById('danger-overlay').style.background = 'radial-gradient(circle, transparent 50%, rgba(234,179,8,0.2) 100%)';
+                    document.getElementById('danger-overlay').style.opacity = '1';
+                    updateStatus("방사능 수치 상승", "text-yellow-600");
+                    updateStatusIcon("fa-radiation", "text-yellow-500", "bg-yellow-100");
+                    showAlert("피폭 위험", "방사능 오염 지역입니다. 신속 이탈 요망.", "error");
+                    break;
+                case 'sinkhole':
+                    btn.classList.add('ring-neutral-500');
+                    updateStatus("지반 침하(싱크홀)", "text-neutral-600");
+                    updateStatusIcon("fa-arrow-down-long", "text-neutral-500", "bg-neutral-100");
+                    showAlert("추락 위험", "대형 융기 및 싱크홀 발생.", "error");
+                    break;
+                case 'snow':
+                    btn.classList.add('ring-sky-500');
+                    scene.fog.color.setHex(0xffffff);
+                    scene.fog.density = 0.03;
+                    updateStatus("폭설 및 기상악화", "text-sky-600");
+                    updateStatusIcon("fa-snowflake", "text-sky-500", "bg-sky-100");
+                    showAlert("외부 출입문 동결", "일부 출구가 차단되었습니다.", "warning");
+                    break;
+                case 'typhoon':
+                    btn.classList.add('ring-cyan-500');
+                    scene.fog.color.setHex(0x94a3b8);
+                    scene.fog.density = 0.015;
+                    updateStatus("초강력 태풍 접근", "text-cyan-600");
+                    updateStatusIcon("fa-hurricane", "text-cyan-500", "bg-cyan-100");
+                    showAlert("강풍 및 파손 경고", "창문 근처 접근 금지", "warning");
+                    break;
+                case 'stampede':
+                    btn.classList.add('ring-rose-500');
+                    updateStatus("인파 밀집 경고", "text-rose-600");
+                    updateStatusIcon("fa-people-group", "text-rose-500", "bg-rose-100");
+                    showAlert("압사 위험구역", "밀집도를 분산하기 위해 우회합니다.", "warning");
+                    break;
+                case 'cyber':
+                    btn.classList.add('ring-emerald-500');
+                    updateStatus("시스템 해킹 감지", "text-emerald-600");
+                    updateStatusIcon("fa-bug", "text-emerald-500", "bg-emerald-100");
+                    showAlert("제어권 상실", "비상 아날로그 유도등이 켜집니다.", "warning");
+                    // Glitch UI effect
+                    document.getElementById('status-panel').style.transform = 'translate(2px, 2px)';
+                    setTimeout(() => document.getElementById('status-panel').style.transform = 'none', 100);
+                    break;
+                case 'shooter':
+                    btn.classList.add('ring-red-700');
+                    document.getElementById('danger-overlay').style.opacity = '1';
+                    updateStatus("총기 난사 / 위협", "text-red-700");
+                    updateStatusIcon("fa-gun", "text-red-600", "bg-red-200");
+                    showAlert("Run, Hide, Fight", "테러범 위치 확인. 은폐 엄폐 요망.", "error");
+                    break;
+                case 'dust':
+                    btn.classList.add('ring-yellow-700');
+                    scene.fog.color.setHex(0xd6d3d1);
+                    scene.fog.density = 0.04;
+                    updateStatus("초미세먼지 경보", "text-yellow-700");
+                    updateStatusIcon("fa-mask-face", "text-yellow-600", "bg-yellow-200");
+                    showAlert("시야 제한", "내부 공조기가 최대 출력으로 가동됩니다.", "warning");
+                    break;
+                case 'heatwave':
+                    btn.classList.add('ring-orange-700');
+                    document.getElementById('danger-overlay').style.background = 'radial-gradient(circle, transparent 50%, rgba(249,115,22,0.15) 100%)';
+                    document.getElementById('danger-overlay').style.opacity = '1';
+                    updateStatus("폭염 경보", "text-orange-700");
+                    updateStatusIcon("fa-temperature-high", "text-orange-600", "bg-orange-200");
+                    showAlert("열사병 주의", "장시간 대피시 온열질환 주의", "warning");
+                    break;
+            }
+        }
+
+        function createHazardVisual(x, z, type) {
+            // Hazard Zone Indicator (Ring)
+            let ringColor = 0xef4444; // default red
+            if (type === 'gas') ringColor = 0x22c55e;
+            if (type === 'chemical') ringColor = 0xa855f7;
+            if (type === 'sinkhole' || type === 'collapse') ringColor = 0x404040;
+            if (type === 'biohazard') ringColor = 0x84cc16;
+
+            const ringGeo = new THREE.RingGeometry(3, 4, 32);
+            const ringMat = new THREE.MeshBasicMaterial({ color: ringColor, side: THREE.DoubleSide, transparent: true, opacity: 0.6 });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = Math.PI / 2;
+            ring.position.set(x, 0.1, z);
+            hazardGroup.add(ring);
+
+            // Special Geometries based on type
+            if (type === 'sinkhole') {
+                const holeGeo = new THREE.CircleGeometry(3, 32);
+                const holeMat = new THREE.MeshBasicMaterial({ color: 0x171717 });
+                const hole = new THREE.Mesh(holeGeo, holeMat);
+                hole.rotation.x = -Math.PI / 2;
+                hole.position.set(x, 0.05, z);
+                hazardGroup.add(hole);
+                return; // No particles needed
+            }
+            if (type === 'chemical') {
+                const poolGeo = new THREE.CircleGeometry(2.5, 32);
+                const poolMat = new THREE.MeshBasicMaterial({ color: 0xa855f7, transparent: true, opacity: 0.8 });
+                const pool = new THREE.Mesh(poolGeo, poolMat);
+                pool.rotation.x = -Math.PI / 2;
+                pool.position.set(x, 0.06, z);
+                hazardGroup.add(pool);
+            }
+
+            // Simple Particle System for Fire/Gas/Dust
+            const particleGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            let particleColor = 0xf97316; // Fire orange
+            let secondaryColor = 0x333333; // Smoke
+            
+            if (type === 'gas') { particleColor = 0x86efac; secondaryColor = 0x4ade80; }
+            if (type === 'explosion') { particleColor = 0xff0000; secondaryColor = 0xf97316; }
+            if (type === 'collapse') { particleColor = 0x78716c; secondaryColor = 0x57534e; }
+            
+            const particleMat = new THREE.MeshBasicMaterial({ color: particleColor, transparent: true, opacity: 0.8 });
+            const secondaryMat = new THREE.MeshBasicMaterial({ color: secondaryColor, transparent: true, opacity: 0.5 });
+            
+            for(let i=0; i<20; i++) {
+                const mesh = new THREE.Mesh(particleGeo, Math.random() > 0.5 ? particleMat : secondaryMat);
+                mesh.position.set(
+                    x + (Math.random() - 0.5) * 3,
+                    (Math.random() * 2),
+                    z + (Math.random() - 0.5) * 3
+                );
+                mesh.userData = {
+                    speedY: Math.random() * 0.05 + 0.02,
+                    speedRot: Math.random() * 0.1
+                };
+                hazardGroup.add(mesh);
+                fireParticles.push(mesh);
+            }
+        }
+
+        // --- UI Updates ---
+        function toggleScenarios() {
+            const content = document.getElementById('scenarios-content');
+            const icon = document.getElementById('toggle-icon');
+            
+            content.classList.toggle('hidden');
+            icon.classList.toggle('rotate-180');
+        }
+
+        function updateStatus(text, colorClass) {
+            const el = document.getElementById('status-text');
+            el.innerText = text;
+            el.className = `text-sm font-bold ${colorClass}`;
+        }
+        
+        function updateStatusIcon(iconClass, textColor, bgColor) {
+            const el = document.getElementById('status-icon');
+            el.className = `w-10 h-10 rounded-full flex items-center justify-center text-xl shadow-inner ${textColor} ${bgColor}`;
+            el.innerHTML = `<i class="fa-solid ${iconClass}"></i>`;
+        }
+
+        function showAlert(title, desc, type) {
+            const box = document.getElementById('alert-box');
+            document.getElementById('alert-title').innerText = title;
+            document.getElementById('alert-desc').innerText = desc;
+            
+            if(type === 'error') {
+                box.classList.replace('border-yellow-500', 'border-red-500');
+                box.classList.replace('border-blue-500', 'border-red-500');
+            } else if (type === 'success' || type === 'info') {
+                box.classList.replace('border-yellow-500', 'border-blue-500');
+                box.classList.replace('border-red-500', 'border-blue-500');
+                // Temporarily change icon for success/info
+                box.querySelector('i').className = "fa-solid fa-circle-info text-blue-400 text-xl pulse-arrow";
+            } else {
+                box.classList.replace('border-red-500', 'border-yellow-500');
+                box.classList.replace('border-blue-500', 'border-yellow-500');
+                box.querySelector('i').className = "fa-solid fa-triangle-exclamation text-yellow-400 text-xl pulse-arrow";
+            }
+
+            // Animate in
+            gsap.to(box, { opacity: 1, y: 0, duration: 0.3 });
+            
+            // Auto hide after 4 seconds
+            setTimeout(() => {
+                gsap.to(box, { opacity: 0, y: -16, duration: 0.3 });
+            }, 4000);
+        }
+
+        function resetSimulation() {
+            if(evacTween) evacTween.kill();
+            isEvacuating = false;
+            currentPath = [];
+            
+            // Player가 초기화 되었을 때만 위치 리셋 (에러 방지 핵심코드)
+            if(player && nodes && nodes.start) {
+                player.position.set(nodes.start.x, 1, nodes.start.z);
+            }
+            
+            const btnEvac = document.getElementById('btn-evacuate');
+            btnEvac.innerHTML = '<i class="fa-solid fa-person-running mr-2"></i> AI 동적 대피 시작';
+            btnEvac.classList.remove('from-green-600', 'to-emerald-600');
+            btnEvac.classList.add('from-blue-600', 'to-indigo-600');
+            
+            document.getElementById('ar-hud').classList.add('hidden');
+            document.getElementById('evac-progress').style.width = '0%';
+            
+            clearDisasters();
+        }
+
+        // --- Render Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Animate Fire Particles
+            if (fireParticles.length > 0) {
+                fireParticles.forEach(p => {
+                    p.position.y += p.userData.speedY;
+                    p.rotation.x += p.userData.speedRot;
+                    p.rotation.y += p.userData.speedRot;
+                    if (p.position.y > 5) {
+                        p.position.y = 0;
+                        p.material.opacity = 0.8;
+                    } else {
+                        p.material.opacity = 1 - (p.position.y / 5);
+                    }
+                });
+            }
+
+            // Animate Flood Plane
+            if (floodPlane && floodPlane.position.y > -0.4) {
+                // Slight wave effect
+                floodPlane.material.opacity = 0.6 + Math.sin(Date.now() * 0.002) * 0.1;
+            }
+
+            // Animate Earthquake (Camera Shake)
+            if (earthquakeActive) {
+                const shakeAmount = 0.3;
+                camera.position.x = 0 + (Math.random() - 0.5) * shakeAmount;
+                camera.position.z = 35 + (Math.random() - 0.5) * shakeAmount;
+            } else {
+                // Reset camera gently
+                camera.position.x += (0 - camera.position.x) * 0.1;
+                camera.position.z += (35 - camera.position.z) * 0.1;
+            }
+
+            // Flashlight follow (if blackout)
+            if(flashlight && flashlight.intensity > 0) {
+                flashlight.position.set(player.position.x, player.position.y + 5, player.position.z);
+            }
+
+            // --- Manual Player Movement ---
+            if (player && !isEvacuating) {
+                let dx = 0;
+                let dz = 0;
+                let speed = earthquakeActive ? 0.08 : 0.25;
+
+                if (keys.ArrowUp || keys.w || keys.W) dz -= speed;
+                if (keys.ArrowDown || keys.s || keys.S) dz += speed;
+                if (keys.ArrowLeft || keys.a || keys.A) dx -= speed;
+                if (keys.ArrowRight || keys.d || keys.D) dx += speed;
+                
+                if (dx !== 0 || dz !== 0) {
+                    let nextX = player.position.x + dx;
+                    let nextZ = player.position.z + dz;
+
+                    // 벽 충돌 체크 (X, Z 축을 분리하여 벽에 닿아도 미끄러지듯 이동할 수 있게 설계)
+                    if (dx !== 0 && !checkCollision(nextX, player.position.z)) {
+                        player.position.x = nextX;
+                    }
+                    if (dz !== 0 && !checkCollision(player.position.x, nextZ)) {
+                        player.position.z = nextZ;
+                    }
+
+                    // 바운더리 제한 (맵 밖으로 나가지 않도록)
+                    player.position.x = Math.max(-19.5, Math.min(19.5, player.position.x));
+                    player.position.z = Math.max(-19.5, Math.min(19.5, player.position.z));
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- Keyboard Control Handlers ---
+        function onKeyDown(event) {
+            if (keys.hasOwnProperty(event.key)) {
+                keys[event.key] = true;
+            }
+        }
+        
+        function onKeyUp(event) {
+            if (keys.hasOwnProperty(event.key)) {
+                keys[event.key] = false;
+            }
+        }
+
+        // --- Real-time Telemetry Logic ---
+        let teleData = { temp: 22.4, hum: 45.2, co2: 410, rad: 0.11 };
+        
+        function updateTelemetry() {
+            let targetTemp = 22.4, targetHum = 45.2, targetCo2 = 410, targetRad = 0.11;
+            
+            if (currentDisaster === 'fire' || currentDisaster === 'explosion') { targetTemp = 500; targetCo2 = 3000; }
+            else if (currentDisaster === 'flood' || currentDisaster === 'tsunami') targetHum = 99.9;
+            else if (currentDisaster === 'gas') targetCo2 = 9000;
+            else if (currentDisaster === 'heatwave') targetTemp = 42.5;
+            else if (currentDisaster === 'radiation') targetRad = 5.50;
+            else if (currentDisaster === 'snow') targetTemp = -12.5;
+            
+            teleData.temp += (targetTemp - teleData.temp) * 0.1 + (Math.random() - 0.5) * 0.5;
+            teleData.hum += (targetHum - teleData.hum) * 0.1 + (Math.random() - 0.5) * 1.0;
+            teleData.co2 += (targetCo2 - teleData.co2) * 0.1 + (Math.random() - 0.5) * 5.0;
+            teleData.rad += (targetRad - teleData.rad) * 0.1 + (Math.random() - 0.5) * 0.01;
+            
+            teleData.hum = Math.max(0, Math.min(100, teleData.hum));
+            teleData.rad = Math.max(0, teleData.rad);
+
+            document.getElementById('tele-temp').innerText = teleData.temp.toFixed(1) + '°C';
+            document.getElementById('tele-hum').innerText = teleData.hum.toFixed(1) + '%';
+            document.getElementById('tele-co2').innerText = Math.round(teleData.co2) + 'ppm';
+            document.getElementById('tele-rad').innerText = teleData.rad.toFixed(2) + 'µSv';
+            
+            // Add alert styling dynamically for dangerous levels
+            document.getElementById('tele-temp').className = `font-bold text-[13px] ${teleData.temp > 50 || teleData.temp < 0 ? 'text-red-600 animate-pulse' : 'text-gray-800'}`;
+            document.getElementById('tele-co2').className = `font-bold text-[13px] ${teleData.co2 > 1000 ? 'text-red-600 animate-pulse' : 'text-gray-800'}`;
+            document.getElementById('tele-rad').className = `font-bold text-[13px] ${teleData.rad > 1.0 ? 'text-red-600 animate-pulse' : 'text-gray-800'}`;
+        }
+        
+        setInterval(updateTelemetry, 1000);
+
+        // Initialize on load
+        window.onload = init;
+
+    </script>
+</body>
+</html>
